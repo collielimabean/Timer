@@ -22,7 +22,6 @@
     {
         int timerfd;
         int epollfd;
-        bool polling;
         std::thread poller;
     };
 
@@ -44,6 +43,7 @@ Timer::Timer(const Interval& timer_period, const TimerCallback& timer_callback, 
 
 Timer::~Timer()
 {
+    this->isRunning = false;
     if (this->impl)
     {
         CleanupImpl();
@@ -84,11 +84,6 @@ void Timer::SetPeriodic(bool periodic)
 bool Timer::IsRunning() const
 {
     return this->isRunning;
-}
-
-void Timer::Stop()
-{
-    this->CleanupImpl();
 }
 
 #ifdef _WIN32
@@ -134,6 +129,15 @@ void Timer::Start()
 
     if (!success)
         throw std::runtime_error("Failed to start timer!");
+
+    this->isRunning = true;
+}
+
+void Timer::Stop()
+{
+    this->isRunning = false;
+    this->CleanupImpl();
+    this->InitializeImpl();
 }
 
 #elif __linux__
@@ -164,13 +168,11 @@ bool Timer::InitializeImpl()
         return false;
     }
     
-    impl->polling = false;
     return true;
 }
 
 void Timer::CleanupImpl()
 {
-    impl->polling = false;
     close(impl->timerfd);
     close(impl->epollfd);
     impl->poller.join();
@@ -200,14 +202,14 @@ void Timer::Start()
         throw std::runtime_error("Failed to start timer!");
     }
 
-    impl->polling = true;
+    this->isRunning = true;
 
     // start poll thread
     impl->poller = std::thread([&]()
     {
         epoll_event events[EPOLL_EVENT_SIZE];
 
-        while (impl->polling)
+        while (this->isRunning)
         {
             int num__events = epoll_wait(impl->epollfd, events, EPOLL_EVENT_SIZE, 1);
             if (num__events == -1)
@@ -220,4 +222,12 @@ void Timer::Start()
         }
     });
 }
+
+void Timer::Stop()
+{
+    this->isRunning = false;
+    if (impl->poller.joinable())
+        impl->poller.join();
+}
+
 #endif
